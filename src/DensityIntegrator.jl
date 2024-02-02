@@ -9,7 +9,6 @@ using Distributions
 using LazySets
 using ForwardDiff
 using Debugger
-using SimpleNonlinearSolve
 
 export compute_means_and_dirs, f, run, plot_res
 
@@ -46,38 +45,6 @@ function compute_means_and_dirs2(pts; pts_0 = zeros(2))
 
     (; means, dirs)
 end
-
-
-# function quadrilateral_area(pts_1::P2, pts_2::P2, pts_3::P2, pts_4::P2) where {P2 <: SVector{2}}
-function quadrilateral_area(pts_1, pts_2, pts_3, pts_4)
-    v1 = pts_3 - pts_1
-    v2 = pts_4 - pts_2
-    return 1/2 * abs( v1[1]*v2[2] - v1[2]*v2[1] )
-end
-
-# using quadrilatera equation
-function compute_step_size(pts, weights, densities, dirs)
-    weights_tilde = 1/minimum(weights)
-
-    function compute_areas(eta, pts, weights)
-        etas = weights_tilde .* eta
-        new_pts = pts + etas .* dirs
-        ax = axes(new_pts, 1);
-        idx_left = mod1.(ax .- 1, length(ax)); idx_right = mod1.(ax .+ 1, length(ax))
-        areas_lhs = quadrilateral_area.(
-            pts[idx_left], new_pts[idx_left], new_pts[ax], pts[ax]
-        )
-        areas_rhs = areas_lhs[idx_right]
-        areas = 1/2*(areas_lhs .+ areas_rhs)
-    end
-
-    prob = IntervalNonlinearProblem((etas, p)->(sum(compute_areas(abs.(etas), pts, weights) .* densities) - 1e-3),
-                                    (0., 10.))
-    sol = solve(prob, ITP())
-    sol.u*1e3 .* weights_tilde
-end
-
-
 
 function f_(pts_mat, params, t)
     # D = MvNormal(zeros(2), 1.0*I(2))
@@ -145,10 +112,7 @@ function f(pts_mat, t, params, D)
     # slopes .= mean(slopes)
     # @show (slopes)
     # res = stack(weights * length(pts) .* slopes .* dirs)
-    # res = stack(weights .* slopes .* dirs)
-    res = stack(
-        compute_step_size(pts, densities, weights, dirs) .* dirs
-    )
+    res = stack(weights .* slopes .* dirs)
     # res = stack(slopes .* dirs)
     # (; res, densities, areas)
     res
@@ -176,8 +140,8 @@ function plot_res(res, D)
     end
     # @show [res.t[idx] calib_vals]
     lines!(ax_rhs, [0, 1], [0, 1])
-    stairs!(ax_rhs, res.t[idx], calib_vals, color = Cycled(2))
-    # (; calib_vals, t_vals=res.t[idx], fig)
+    lines!(ax_rhs, res.t[idx], calib_vals)
+    @bp
     fig
 
 end
@@ -211,11 +175,9 @@ function run(; pts_0=zeros(2), n=100, p=0.5)
     pts = [pts_0 + 1e-6*[cos(t); sin(t)] for t in LinRange(0, 2*pi, n+1)[1:end-1]]
 
     prob = ODEProblem(DensityIntegrator.f_, stack(pts), (0.0, p), (; pts_0, D))
-    # res = solve(prob, AutoTsit5(Rosenbrock23()));
-    # res = solve(prob, AutoVern7(Rodas4()))
-    # res = solve(prob, Euler(); dt=0.1);
+    res = solve(prob, AutoTsit5(Rosenbrock23()));
     # res = solve(prob, Rodas4(autodiff=false));
-    res = solve(prob, Tsit5(); alg_hints=:stiff)
+    # res = solve(prob, Tsit5(); alg_hints=:stiff)
     # res = solve(prob, RadauIIA3(; autodiff=false))
     hull_pts = collect(eachcol(res.u[end]))
     hull = VPolygon(hull_pts)
