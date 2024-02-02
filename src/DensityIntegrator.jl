@@ -64,26 +64,57 @@ function f(pts_mat, t, params, D)
     # D::Mv = params[:D]
     pts = eachcol(pts_mat)
     ax = axes(pts, 1)
+    idx_left  = mod1.(ax .- 1, length(ax))
+    idx_right = mod1.(ax .+ 1, length(ax))
+
     densities = pdf.([D], pts)
 
     areas = zeros(size(ax))
     for i in ax
         # idx_left  = circshift(ax,  1)[i]
         # idx_right = circshift(ax, -1)[i]
-        idx_left = mod1(i-1, length(ax))
-        idx_right= mod1(i+1, length(ax))
-        areas[i] = 1/2 * (  norm(pts[i] - pts[idx_left])
-                          + norm(pts[i] - pts[idx_right]))
+        idx_left_  = mod1(i-1, length(ax))
+        idx_right_ = mod1(i+1, length(ax))
+        areas[i]   = 1/2 * (  norm(pts[i] - pts[idx_left_])
+                            + norm(pts[i] - pts[idx_right_]))
     end
     areas = 2*pi*norm.(pts .- [mean(pts)]) / length(pts)
-    actual_areas = norm.(
-        pts .- pts[mod1.(axes(pts, 1) .+1, length(pts))]
+    # actual_areas = norm.(
+    #     pts .- pts[idx_right]
+    # )
+    areas_lhs = norm.(pts[idx_left] .- pts)
+    areas_rhs = norm.(pts[idx_left] .- pts)
+    actual_areas = 1/2 * (
+        areas_lhs + areas_rhs
     )
-    areas *= sum(actual_areas) / sum(areas)
-    # areas = actual_areas
+
+    dirs = compute_means_and_dirs(pts; pts_0=mean(pts))
+    angles_lhs, angles_rhs = let
+        vecs_rhs = normalize.(pts[idx_right] .- pts)
+        vecs_lhs = normalize.(pts[idx_left ] .- pts)
+        angles_lhs = abs.(abs.(acos.(dot.(vecs_lhs, dirs))) .- pi/2)
+        angles_rhs = abs.(abs.(acos.(dot.(vecs_rhs, dirs))) .- pi/2)
+        angles_lhs, angles_rhs
+    end
+
+    # actual_areas = 1/2 * (
+    #     areas_lhs .* 1 ./cos.(angles_lhs) +
+    #     areas_rhs .* 1 ./cos.(angles_rhs)
+    # )
+
+    angles = let
+        vecs_rhs = normalize.(pts[idx_right] .- pts)
+        vecs_lhs = normalize.(pts[idx_left ] .- pts)
+        abs.(pi .- acos.(dot.(vecs_rhs, vecs_lhs)))
+    end
+
+    actual_areas .*= 1 ./ cos.(angles ./ 2)
+
+
+    # areas *= sum(actual_areas) / sum(areas)
+    areas = actual_areas
 
     # dirs = compute_means_and_dirs(pts; pts_0=params[:pts_0])
-    dirs = compute_means_and_dirs(pts; pts_0=mean(pts))
     # @show (densities)
     # @assert all(abs.(densities .- densities[1]) .< 1e-3) "$(densities .- densities[1])" atol=1e-4
     # @assert all(abs.(areas .- areas[1]) .< 1e-3) "Areas: $(areas .- areas[1])" atol=1e-4
@@ -107,7 +138,7 @@ function f(pts_mat, t, params, D)
     #     )
     #     for (g, d) in zip(gs, dirs)
     # ], 1)
-    weights = normalize(densities.^3, 1)
+    weights = normalize(densities.^2, 1)
     # weights = ones(size(densities)) / length(pts)
     # slopes .= mean(slopes)
     # @show (slopes)
@@ -141,7 +172,6 @@ function plot_res(res, D)
     # @show [res.t[idx] calib_vals]
     lines!(ax_rhs, [0, 1], [0, 1])
     lines!(ax_rhs, res.t[idx], calib_vals)
-    @bp
     fig
 
 end
@@ -182,9 +212,96 @@ function run(; pts_0=zeros(2), n=100, p=0.5)
     hull_pts = collect(eachcol(res.u[end]))
     hull = VPolygon(hull_pts)
     # plot_res(res, D)
-    @show mean([x ∈ hull for x in eachcol(rand(D, 10_000))])
+    # @show mean([x ∈ hull for x in eachcol(rand(D, 10_000))])
     # @show mean([check_point_in_hull(hull_pts, x) for x in eachcol(rand(D, 10_000))])
     (; res, D)
+end
+
+function make_widget(; n=100, p=0.5)
+    # D = MvNormal(zeros(2), 1.0*I(2))
+    D = MvNormal(zeros(2), [1. 0.5; 0.5 1.])
+
+    pts_0=Observable(zeros(2))
+
+    # pts_0 = SVector(0., 0.)
+    # pts_0 = zeros(2)
+    # n = 10
+    pts = @lift [$pts_0 + 1e-6*[cos(t); sin(t)] for t in LinRange(0, 2*pi, n+1)[1:end-1]]
+
+    prob = @lift ODEProblem(DensityIntegrator.f_, stack($pts), (0.0, p), (; $pts_0, D))
+    res = @lift solve($prob, AutoTsit5(Rosenbrock23()), saveat=0.05);
+    # res = solve(prob, Rodas4(autodiff=false));
+    # res = solve(prob, Tsit5(); alg_hints=:stiff)
+    # res = solve(prob, RadauIIA3(; autodiff=false))
+    hull_pts = @lift collect(eachcol($res.u[end]))
+    hull = @lift VPolygon($hull_pts)
+    # plot_res(res, D)
+    on(hull) do hull
+        @show mean([x ∈ hull for x in eachcol(rand(D, 10_000))])
+    end
+    # @show mean([check_point_in_hull(hull_pts, x) for x in eachcol(rand(D, 10_000))])
+
+    fig = plot_res_interactive(res, D, pts_0)
+    (; fig, pts_0)
+end
+
+function plot_res_interactive(res, D, pts_0)
+    fig = Makie.Figure(); ax = Axis(fig[1,1]; aspect=1, title="Prediction sets for given p");
+
+    each_obs = [
+        @lift $res.u[i]
+        for i in 1:length(res[].u)
+    ]
+    for u in each_obs
+        u_ = @lift [$u $u[:, 1]]
+        # scatter!(ax, @lift([Point2(pt) for pt in eachcol($u)]))
+        lines!(ax, @lift([Point2(pt) for pt in eachcol($u_)]))
+    end
+    # Legend(fig[1,2])
+    # axislegend(ax)
+
+    xs = -10:0.01:10; ys = xs; zs = [pdf(D, [x;y]) for x in xs, y in ys];
+    contour!(ax, xs, ys, zs)
+
+    # on(events(fig).mousebutton) do event
+    #     if event.button == Mouse.left && event.action == Mouse.press
+    #         mp = events(fig).mouseposition[]
+    #         pts_0[] = collect(mp)
+    #         notify(pts_0)
+    #     end
+    # end
+    register_interaction!(ax, :my_interaction) do event::MouseEvent, axis
+        if event.type === MouseEventTypes.leftclick || event.type === MouseEventTypes.leftdrag
+            mp = mouseposition(ax)
+            pts_0[] = collect(mp)
+            notify(pts_0)
+
+            println("You clicked on the axis!")
+        end
+    end
+    deactivate_interaction!(ax, :rectanglezoom)
+
+    ax_rhs = Axis(fig[1,2]; aspect=1, title="Calibration plot.")
+    samples = eachcol(rand(D, 10_000))
+    calib_vals = Observable(Float64[]); sizehint!(calib_vals[], length(res[].u)-1)
+    idx = axes(res[].t, 1)[2:end]
+    on(res) do res
+        empty!(calib_vals[])
+        for (u, t) in zip(res.u[idx], res.t[idx])
+            hull = VPolygon(collect(eachcol(u)))
+            push!(calib_vals[], mean([x ∈ hull for x in samples]))
+        end
+        notify(calib_vals)
+    end
+    res[] = res[]; notify(res)
+    # @show [res.t[idx] calib_vals]
+    lines!(ax_rhs, [0, 1], [0, 1])
+    lines!(ax_rhs, res[].t[idx], calib_vals; linewidth=5)
+
+
+
+    fig
+
 end
 
 end # module DensityIntegrator
