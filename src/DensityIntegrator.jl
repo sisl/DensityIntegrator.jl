@@ -69,7 +69,7 @@ function f(pts_mat, t, params, D)
 
     densities = pdf.([D], pts)
 
-    areas = zeros(size(ax))
+    areas = zeros(eltype(first(pts)), size(ax))
     for i in ax
         # idx_left  = circshift(ax,  1)[i]
         # idx_right = circshift(ax, -1)[i]
@@ -84,9 +84,11 @@ function f(pts_mat, t, params, D)
     # )
     areas_lhs = norm.(pts[idx_left] .- pts)
     areas_rhs = norm.(pts[idx_left] .- pts)
-    actual_areas = 1/2 * (
-        areas_lhs + areas_rhs
-    )
+
+    # actual_areas = 1/2 * (
+    #     areas_lhs + areas_rhs
+    # )
+    # actual_areas .*= 1 ./ cos.(angles ./ 2)
 
     dirs = compute_means_and_dirs(pts; pts_0=mean(pts))
     angles_lhs, angles_rhs = let
@@ -97,18 +99,16 @@ function f(pts_mat, t, params, D)
         angles_lhs, angles_rhs
     end
 
-    # actual_areas = 1/2 * (
-    #     areas_lhs .* 1 ./cos.(angles_lhs) +
-    #     areas_rhs .* 1 ./cos.(angles_rhs)
-    # )
+    actual_areas = 1/2 * (
+        areas_lhs .* 1 ./abs.(cos.(angles_lhs)) +
+        areas_rhs .* 1 ./abs.(cos.(angles_rhs))
+    )
 
-    angles = let
-        vecs_rhs = normalize.(pts[idx_right] .- pts)
-        vecs_lhs = normalize.(pts[idx_left ] .- pts)
-        abs.(pi .- acos.(dot.(vecs_rhs, vecs_lhs)))
-    end
-
-    actual_areas .*= 1 ./ cos.(angles ./ 2)
+    # angles = let
+    #     vecs_rhs = normalize.(pts[idx_right] .- pts)
+    #     vecs_lhs = normalize.(pts[idx_left ] .- pts)
+    #     abs.(pi .- acos.(dot.(vecs_rhs, vecs_lhs)))
+    # end
 
 
     # areas *= sum(actual_areas) / sum(areas)
@@ -138,7 +138,24 @@ function f(pts_mat, t, params, D)
     #     )
     #     for (g, d) in zip(gs, dirs)
     # ], 1)
-    weights = normalize(densities.^2, 1)
+
+    # set up extra weights for stabilization
+    lambdas = compute_intersection.(pts[idx_left], pts[idx_right], pts, dirs) .|> x->getindex(x, 2)
+    sigmoid(x; alpha=1) = (1+exp(-x))^(-alpha)  # https://en.wikipedia.org/wiki/Generalised_logistic_function
+    # extra_weights = sigmoid.(1000 .* lambdas; alpha=1)
+    # extra_weights = sigmoid.(100 .* lambdas; alpha=3)
+    lambdas_ = lambdas / (maximum(abs, lambdas) + 1e-4)
+    # @assert maximum(abs, lambdas_) ≈ (1/(1+1e-4)) " $(maximum(abs, lambdas_)) $(lambdas_)"
+
+
+    # weights = normalize(densities.^2, 1)
+    # weights = 1/2 * (normalize(densities.^2, 1) .+ normalize(abs.(extra_weights), 1))
+    weights = normalize(densities.^2 .* (1 .+ 7/8 .* lambdas_), 1)
+    # weights = normalize(densities.^2 .* 1, 1)
+    # weights = normalize(densities.^2 .* abs.(extra_weights), 1)
+
+    @assert all(>(0), weights.*slopes)
+
     # weights = ones(size(densities)) / length(pts)
     # slopes .= mean(slopes)
     # @show (slopes)
@@ -178,10 +195,18 @@ end
 
 # check if y0 + lambda d intersects (x0->x1)
 function check_intersection(x0, x1, y0, d)
-    M = [(x1 - x0)/norm(x1-x0) -d]
-    (det(M) ≈ 0) && return false
-    lambdas = M \ (y0 - x0)
+    lambdas = compute_intersection(x0, x1, y0, d)
     return 0 <= lambdas[1] <= 1
+end
+function compute_intersection(x0, x1, y0, d)
+    T = eltype(x0)
+    @assert norm(x1-x0) > eps(T)
+    M = [(x1 - x0)/norm(x1-x0) -d]
+    @assert all(isfinite.(M)) "$(M)"
+    # (det(M) ≈ 0) && return false
+    lambdas = M \ (y0 - x0)
+    return lambdas
+    # return NTuple{2, T}(lambdas)
 end
 
 function check_point_in_hull(hull_pts, pt)
@@ -205,7 +230,8 @@ function run(; pts_0=zeros(2), n=100, p=0.5)
     pts = [pts_0 + 1e-6*[cos(t); sin(t)] for t in LinRange(0, 2*pi, n+1)[1:end-1]]
 
     prob = ODEProblem(DensityIntegrator.f_, stack(pts), (0.0, p), (; pts_0, D))
-    res = solve(prob, AutoTsit5(Rosenbrock23()));
+    solve_opts = (; atol=1e-13)
+    res = solve(prob, AutoTsit5(Rosenbrock23()); solve_opts...);
     # res = solve(prob, Rodas4(autodiff=false));
     # res = solve(prob, Tsit5(); alg_hints=:stiff)
     # res = solve(prob, RadauIIA3(; autodiff=false))
@@ -219,7 +245,13 @@ end
 
 function make_widget(; n=100, p=0.5)
     # D = MvNormal(zeros(2), 1.0*I(2))
-    D = MvNormal(zeros(2), [1. 0.5; 0.5 1.])
+    # D = MvNormal(zeros(2), [1. 0.5; 0.5 1.])
+    D = MixtureModel(MvNormal[
+            MvNormal(zeros(2), 0.1.*[1. 0.5; 0.5 1.]),
+            MvNormal(ones(2), 0.1.*[1 0; 0 1.]),
+            # MvNormal([1;-0.5], 0.1.*[1. 0.5; 0.5 1.]),
+        ], [0.4, 0.6])
+
 
     pts_0=Observable(zeros(2))
 
@@ -229,16 +261,27 @@ function make_widget(; n=100, p=0.5)
     pts = @lift [$pts_0 + 1e-6*[cos(t); sin(t)] for t in LinRange(0, 2*pi, n+1)[1:end-1]]
 
     prob = @lift ODEProblem(DensityIntegrator.f_, stack($pts), (0.0, p), (; $pts_0, D))
-    res = @lift solve($prob, AutoTsit5(Rosenbrock23()), saveat=0.05);
+    # solve_opts = (; abstol=1e-13, reltol=1e-13)
+    solve_opts = (; )
+    # solver = AutoVern9(Rodas5P())
+    solver = Vern8()
+    # solver = AutoVern9(KenCarp4())
+    # solver = Vern8()
+    # solver = Feagin12()
+    # solver = Vern8()
+    # solver = AutoTsit5(Rosenbrock23())
+    res = @lift solve($prob, solver; saveat=0.05, solve_opts...);
     # res = solve(prob, Rodas4(autodiff=false));
     # res = solve(prob, Tsit5(); alg_hints=:stiff)
     # res = solve(prob, RadauIIA3(; autodiff=false))
     hull_pts = @lift collect(eachcol($res.u[end]))
     hull = @lift VPolygon($hull_pts)
     # plot_res(res, D)
-    on(hull) do hull
-        @show mean([x ∈ hull for x in eachcol(rand(D, 10_000))])
-    end
+
+    # on(hull) do hull
+    #     @show mean([x ∈ hull for x in eachcol(rand(D, 10_000))])
+    # end
+
     # @show mean([check_point_in_hull(hull_pts, x) for x in eachcol(rand(D, 10_000))])
 
     fig = plot_res_interactive(res, D, pts_0)
@@ -254,8 +297,8 @@ function plot_res_interactive(res, D, pts_0)
     ]
     for u in each_obs
         u_ = @lift [$u $u[:, 1]]
-        # scatter!(ax, @lift([Point2(pt) for pt in eachcol($u)]))
         lines!(ax, @lift([Point2(pt) for pt in eachcol($u_)]))
+        scatter!(ax, @lift([Point2(pt) for pt in eachcol($u)]))
     end
     # Legend(fig[1,2])
     # axislegend(ax)
@@ -276,7 +319,7 @@ function plot_res_interactive(res, D, pts_0)
             pts_0[] = collect(mp)
             notify(pts_0)
 
-            println("You clicked on the axis!")
+            # println("You clicked on the axis!")
         end
     end
     deactivate_interaction!(ax, :rectanglezoom)
