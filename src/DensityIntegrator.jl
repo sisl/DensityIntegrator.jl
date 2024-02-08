@@ -12,6 +12,8 @@ using Debugger
 
 export compute_means_and_dirs, f, run, plot_res
 
+include("make_points.jl")
+
 greet() = print("Hello World!")
 
 function compute_means_and_dirs(pts::AbstractArray; pts_0 = zeros(2))
@@ -249,8 +251,12 @@ function make_widget(; n=100, p=0.5)
     D = MixtureModel(MvNormal[
             MvNormal(zeros(2), 0.1.*[1. 0.5; 0.5 1.]),
             MvNormal(ones(2), 0.1.*[1 0; 0 1.]),
-            # MvNormal([1;-0.5], 0.1.*[1. 0.5; 0.5 1.]),
-        ], [0.4, 0.6])
+            MvNormal([1;-0.5], 0.1.*[1. 0.5; 0.5 1.]),
+        ], normalize([
+            0.4,
+            0.6,
+            0.3
+        ], 1))
 
 
     pts_0=Observable(zeros(2))
@@ -264,7 +270,7 @@ function make_widget(; n=100, p=0.5)
     # solve_opts = (; abstol=1e-13, reltol=1e-13)
     solve_opts = (; )
     # solver = AutoVern9(Rodas5P())
-    solver = Vern8()
+    solver = Vern8(; thread=OrdinaryDiffEq.True())
     # solver = AutoVern9(KenCarp4())
     # solver = Vern8()
     # solver = Feagin12()
@@ -297,8 +303,8 @@ function plot_res_interactive(res, D, pts_0)
     ]
     for u in each_obs
         u_ = @lift [$u $u[:, 1]]
-        lines!(ax, @lift([Point2(pt) for pt in eachcol($u_)]))
-        scatter!(ax, @lift([Point2(pt) for pt in eachcol($u)]))
+        lines!(ax, @lift([Makie.Point2(pt) for pt in eachcol($u_)]))
+        scatter!(ax, @lift([Makie.Point2(pt) for pt in eachcol($u)]))
     end
     # Legend(fig[1,2])
     # axislegend(ax)
