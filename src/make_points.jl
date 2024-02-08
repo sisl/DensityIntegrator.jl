@@ -83,7 +83,7 @@ end
 compute_triangulation(pts::AbstractVector{GB.Point{Dim, T}}) where {Dim, T} =
     compute_triangulation(HalfEdgeTopology, pts)
 
-function compute_triangulation(TopoType::Type{TT}, pts::AbstractVector{GB.Point{Dim, T}}) where {Dim, T, TT<:Topology}
+function compute_triangulation(pts::AbstractVector{GB.Point{Dim, T}}) where {Dim, T}
     push!(pts, GB.Point{Dim, T}(zeros(T, Dim)))
     # qhull delunay Qbb=more stability Qt=triangulate everything to simplex
     qhull_flags = "qhull d Qbb QV$(length(pts)-1) QJ Pg Qg"  # maybe Qz for "cospherical"?
@@ -102,8 +102,12 @@ function compute_triangulation(TopoType::Type{TT}, pts::AbstractVector{GB.Point{
     # simplices = simplices[:, simplices[end, :] .== length(pts)]
 
     simplices = simplices[1:Dim, :]
+    connecs = [connect(Tuple(col), Ksimplex{Dim-1, Dim})
+               for col in eachcol(simplices)]
+    topo = IndexedAdjacenciesTopology(connecs)
 
-    topo = TopoType(connect.(Tuple.(eachcol(simplices))))
+
+    # topo = TopoType(connect.((eachcol(simplices))))
     # topo = SimpleTopology(connect.(Tuple.(eachcol(simplices))));
     # return SimpleMesh(Meshes.Point{Dim, T}.(pts[1:end-1]), topo)
     return SimpleMesh(Meshes.Point{Dim, T}.(pts[1:end-1]), topo)
@@ -111,15 +115,18 @@ end
 """
 Usage example:
 ```julia
-pts0 = DensityIntegrator.initialize_points_on_unit_hypersphere(3, 10_000);
-pts1 = DensityIntegrator.subselect_regular_surface(copy(pts0), 100);
+dim = 4 # 3
+pts0 = DensityIntegrator.initialize_points_on_unit_hypersphere(dim, 10_000);
+pts1 = DensityIntegrator.subselect_regular_surface(copy(pts0), 500);
 # without viz
 myhull = DensityIntegrator.compute_triangulation(copy(pts1));
-adj = Adjacency{0}(myhull)
-adj(1)
+# adj = Adjacency{0}(myhull)
+# adj(1)
 # or
 myhull = DensityIntegrator.compute_triangulation(SimpleTopology,copy(pts1));
-viz(myhull; showfacets=true, alpha=0.8)
+fig = viz(myhull; showfacets=true, alpha=0.8)
+viz!(myhull.vertices; pointsize=20)
+fig
 ```
 """
 
@@ -127,30 +134,30 @@ viz(myhull; showfacets=true, alpha=0.8)
 """
 Some more examples.
 ```julia
+julia> import Makie
 julia> import Makie: Observable, lift
 
-julia> myhull = DensityIntegrator.compute_triangulation(SimpleTopology,copy(pts1));
-julia> myhull_adj = SimpleMesh(myhull.vertices, convert(HalfEdgeTopology, myhull.topology));
+julia> myhull = DensityIntegrator.compute_triangulation(copy(pts1));
 
-julia> adj = Adjacency{0}(myhull_adj.topology)
-julia> cob = Coboundary{0, 2}(myhull_adj.topology)
+julia> adj = Adjacency{0}(topology(myhull))
+julia> cob = Coboundary{0, paramdim(myhull)}(topology(myhull))
 
 julia> base_idx = Observable(4)
 julia> cs = lift(base_idx) do base_idx
-         cs = fill(:red, length(myhull.vertices));
+         cs = fill(:red, nvertices(myhull));
          cs[base_idx] = :orange
          cs[adj(base_idx)] .= :white
          cs
        end
 julia> cs_facet = lift(base_idx) do base_idx
-         cs = fill(:red, length(myhull.topology.elems));
+         cs = fill(:white, nelements(topology(myhull)))
          # cs[base_idx] = :orange
-         cs[cob(base_idx)] .= :white
+         cs[cob(base_idx)] .= :red
          cs
        end
 
 julia> fig, ax = viz(myhull; showfacets=true, alpha=0.8, color=cs_facet, facetcolor=:blue)
-julia> viz!(fig[1,1], myhull.vertices; showfacets=true, alpha=0.8, color=cs, pointsize=20)
+julia> viz!(fig[1,1], myhull.vertices; showfacets=true, alpha=0.8, color=cs, pointsize=5)
 julia> sl = Makie.Slider(fig[2,1], range=1:length(myhull.vertices), startvalue=1)
 julia> Makie.connect!(base_idx, sl.value)
 julia> fig
