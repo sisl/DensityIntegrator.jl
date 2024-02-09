@@ -13,6 +13,7 @@ using Debugger
 export compute_means_and_dirs, f, run, plot_res
 
 include("make_points.jl")
+include("higher_d.jl")
 
 greet() = print("Hello World!")
 
