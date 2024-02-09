@@ -4,7 +4,7 @@ function f_higher_d(pts_arr, params, t)
     adj_vert = Adjacency{0}(topo)
     cob_vert = Coboundary{0, paramdim(topo)}(topo)
     pts_vec = [Meshes.Point(c...) for c in eachcol(pts_arr)]
-    dirs = eachcol(pts_arr) .- [mean(eachcol(pts_arr))]
+    dirs = normalize.(eachcol(pts_arr) .- [mean(eachcol(pts_arr))])
 
     densities = pdf.([D], eachcol(pts_arr))
     unweighted_step_size = zeros(size(pts_vec))
@@ -29,7 +29,8 @@ function f_higher_d(pts_arr, params, t)
         mat = [(pts_arr[:, neigh_vert_idxs[2:end]] .- p0) (-dirs[vidx])]
         normalize!.(eachcol(mat))
 
-        lambdas = pinv(mat) * (pts_arr[:, vidx] - p0)
+        # lambdas = pinv(mat) * (pts_arr[:, vidx] - p0)
+        lambdas = (mat'*mat + 1e-2I)\mat'*(pts_arr[:, vidx] - p0)
         lambdas_[vidx] = lambdas[end]
     end
 
@@ -59,5 +60,8 @@ function run_higher_d(; p_max=0.1)
 
     for u in sol.u
         Makie.scatter!(ax, [Makie.Point2(col) for col in eachcol(u)])
-    end; fig
+    end
+    xs = -10:0.01:10; ys = xs; zs = [pdf(D, [x;y]) for x in xs, y in ys];
+    contour!(ax, xs, ys, zs)
+    fig
 end
