@@ -7,19 +7,28 @@ function f_higher_d(pts_arr, params, t)
     dirs = normalize.(eachcol(pts_arr) .- [mean(eachcol(pts_arr))])
 
     densities = pdf.([D], eachcol(pts_arr))
-    unweighted_step_size = zeros(size(pts_vec))
+    unweighted_step_size = zeros(size(pts_arr, 2))
+
+    debug_flag = fill(false, size(pts_arr, 2)) # check if every vertex is traversed exactly once
 
     lambdas_ = zeros(size(pts_vec))
 
 
     for vidx in Meshes.vertices(topo)
+        @assert !debug_flag[vidx]; debug_flag[vidx] = true
         neigh_idxs = cob_vert(vidx)
 
-        neigh_simplices = Meshes.materialize.(topo.simplicies[neigh_idxs], [pts_vec])
-        ns = normal.(neigh_simplices)
+        neigh_simplices = Meshes.materialize.(Meshes.element.([topo], neigh_idxs), [pts_vec])
+        ns = normalize.(normal.(neigh_simplices))
         hvolumes = measure.(neigh_simplices)  # hyper-volumes
+        dir = dirs[vidx]
 
-        total_volume = sum([abs(n'*dirs[vidx]) for n in ns] .* hvolumes./(nvertices.(neigh_simplices)))
+        # TODO: double check if this has to be inverse or no...
+        @assert all(norm(n) ≈ 1. for n in ns) norm.(ns)
+        @assert norm(dir) ≈ 1.
+        cosine_factors = [abs((n'*dir)) for n in ns]
+        # cosine_factors = 1
+        total_volume = sum( cosine_factors .* hvolumes ./ nvertices.(neigh_simplices))
 
         unweighted_step_size[vidx] = inv(total_volume * densities[vidx])
 
@@ -29,17 +38,17 @@ function f_higher_d(pts_arr, params, t)
         mat = [(pts_arr[:, neigh_vert_idxs[2:end]] .- p0) (-dirs[vidx])]
         normalize!.(eachcol(mat))
 
-        # lambdas = pinv(mat) * (pts_arr[:, vidx] - p0)
-        lambdas = (mat'*mat + 1e-2I)\mat'*(pts_arr[:, vidx] - p0)
+        lambdas = (mat'*mat + 1e-5I)\mat'*(pts_arr[:, vidx] - p0)
         lambdas_[vidx] = lambdas[end]
     end
+    @assert all(debug_flag)
 
-    lambdas_ = lambdas_ / (maximum(abs, lambdas_) + 1e-4)
+    lambdas_ ./= (maximum(abs, lambdas_) + 1e-4)
 
     weights = normalize(densities.^2 .* (1 .+ 7/8 .* lambdas_), 1)
     weighted_step_size = weights .* unweighted_step_size
 
-    res = stack(weighted_step_size.* dirs)
+    res = stack(weighted_step_size .* dirs)
     res
 end
 
@@ -53,8 +62,9 @@ function run_higher_d(; p_max=0.1)
 
     D = MvNormal(zeros(2), [1. 0.5; 0.5 1.])
     prob = ODEProblem(DensityIntegrator.f_higher_d, stack(pts), (0.0, p_max), (; topo=myhull.topology, D))
-    # solve_opts = (; atol=1e-13)
-    sol = solve(prob, Tsit5(); saveat=p_max/10)
+    # solve_opts = (; abstol=1e-13)
+    solve_opts = (; )
+    sol = solve(prob, Vern8(); saveat=p_max/10, solve_opts...)
 
     fig = Makie.Figure(); ax = Makie.Axis(fig[1,1]);
 
@@ -63,5 +73,121 @@ function run_higher_d(; p_max=0.1)
     end
     xs = -10:0.01:10; ys = xs; zs = [pdf(D, [x;y]) for x in xs, y in ys];
     contour!(ax, xs, ys, zs)
+
+    ax_rhs = Axis(fig[1,2]; aspect=1)
+    samples = eachcol(rand(D, 10_000))
+    calib_vals = Float64[]; sizehint!(calib_vals, length(sol.u))
+    idx = axes(sol.t, 1)[1:end]
+    for (i, u, t) in zip(idx, sol.u[idx], sol.t[idx])
+        hull_pts = collect(eachcol(u))
+        hull = SimpleMesh(Tuple.(eachcol(sol.u[i])), myhull.topology)
+        push!(calib_vals, mean([Meshes.myin(Meshes.Point(x...), hull) for x in samples]))
+    end
+    # @show [sol.t[idx] calib_vals]
+    lines!(ax_rhs, [0, 1], [0, 1])
+    lines!(ax_rhs, sol.t[idx], calib_vals)
+
+
     fig
 end
+
+function run_higher_d_3(; p_max=0.1, n_pts=80)
+    dim = 3 # 3
+    pts0 = DensityIntegrator.initialize_points_on_unit_hypersphere(dim, 10_000);
+    pts = DensityIntegrator.subselect_regular_surface(copy(pts0), 80);
+    pts .*= 1e-5;
+
+    myhull = DensityIntegrator.compute_triangulation(copy(pts));
+
+
+    D = MixtureModel(MvNormal[
+            MvNormal(zeros(3), 1/2 .* [1. 0 0.5; 0 1. 0.5; 0.5 0.5 1]),
+            MvNormal(ones(3), 1/2 .* [1 0 0; 0 1. 0; 0 0 1]),
+            MvNormal([1;-0.5;-1], 1/2 .* [1. 0.5 0; 0.5 1. 0; 0 0 1]),
+        ], normalize([
+            0.33,
+            0.33,
+            0.34
+        ], 1))
+    # D = MvNormal(zeros(3), [1. 0.9 0; 0.9 1. 0; 0 0 1])
+    prob = ODEProblem(DensityIntegrator.f_higher_d, stack(pts), (0.0, p_max), (; topo=myhull.topology, D))
+    # solve_opts = (; atol=1e-13)
+    sol = solve(prob, Vern8(); saveat=p_max/100)
+    myhull, sol, D
+end
+# hull, sol, D = DensityIntegrator.run_higher_d_3(; p_max=0.7, n_pts=200);
+# DensityIntegrator.plot_sol_3(hull, sol, D; plot_calibration=true)
+
+function plot_sol_3(hull, sol, D; plot_calibration=true)
+    fig = Makie.Figure(); ax = Makie.Axis3(fig[1,1], limits=((-2,2),(-2,2),(-2,2)));
+
+    plt_idx = Observable{Int}(1)
+    out_mesh = @lift SimpleMesh(Tuple.(eachcol(sol.u[$plt_idx])), hull.topology)
+    viz!(ax, out_mesh; alpha=0.8, showfacets=true, transparency=true)
+
+    xs = LinRange(-2, 2, 100)
+    ys = LinRange(-2, 2, 100)
+    zs = LinRange(-2, 2, 100)
+    vals = pdf.([D], [[x;y;z] for x in xs, y in ys, z in zs])
+    vplt = volumeslices!(ax, xs, ys, zs, vals; alpha=0.7, transparency=true)
+    # vplt[:update_xy][](length(xs)÷2)
+    # vplt[:update_xz][](length(ys)÷2)
+    # vplt[:update_yz][](length(zs)÷2)
+    vplt[:update_xy][](length(xs)÷2)
+    vplt[:update_xz][](20)
+    vplt[:update_yz][](76)
+
+    if D isa MixtureModel
+        scatter!(ax, Makie.Point3.([c.μ for c in D.components]), color=:red, markersize=25)
+    end
+
+    sl = Makie.Slider(fig[2,1], range=1:length(sol.u), startvalue=1)
+    Makie.connect!(plt_idx, sl.value)
+
+    if plot_calibration
+        ax_rhs = Axis(fig[1,2]; aspect=1)
+        samples = eachcol(rand(D, 10_000))
+        calib_vals = Float64[]; sizehint!(calib_vals, length(sol.u))
+        idx = axes(sol.t, 1)[1:end]
+        for (i, u, t) in zip(idx, sol.u[idx], sol.t[idx])
+            hull_pts = collect(eachcol(u))
+            hull_ = SimpleMesh(Tuple.(eachcol(sol.u[i])), hull.topology)
+            push!(calib_vals, mean([Meshes.myin(Meshes.Point(x...), hull_) for x in samples]))
+        end
+        # @show [sol.t[idx] calib_vals]
+        lines!(ax_rhs, [0, 1], [0, 1])
+        lines!(ax_rhs, sol.t[idx], calib_vals)
+    end
+    fig
+end
+
+
+
+
+# quick test if the `myin` function works...
+# julia> dim = 3 # 3
+# 3
+#
+# julia> pts0 = DensityIntegrator.initialize_points_on_unit_hypersphere(dim, 10_000);
+#
+# julia> pts = DensityIntegrator.subselect_regular_surface(copy(pts0), 50);
+#
+# julia> pts = DensityIntegrator.subselect_regular_surface(copy(pts0), 300);
+#
+# julia> myhull = DensityIntegrator.compute_triangulation(copy(pts));
+#
+# julia> rand(3, 10_000);
+#
+# julia> samples = rand(3, 10_000);
+#
+# julia> rand(3, 10_000);^C
+#
+# julia> mean([Meshes.myin(Meshes.Point(x...), hull) for x in eachcol(samples)])
+# 0.0
+#
+# julia> samples = rand(3, 10_000) .* 2 .- 1;
+#
+# julia> mean([Meshes.myin(Meshes.Point(x...), hull) for x in eachcol(samples)])
+# 0.0
+#
+# julia> mean([Meshes.myin(Meshes.Point(x...), myhull) for x in eachcol(samples)])

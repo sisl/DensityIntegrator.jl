@@ -115,7 +115,7 @@ end
 """
 Usage example:
 ```julia
-dim = 3 # 3
+dim = 2 # 3
 pts0 = DensityIntegrator.initialize_points_on_unit_hypersphere(dim, 10_000);
 pts1 = DensityIntegrator.subselect_regular_surface(copy(pts0), 500);
 # without viz
