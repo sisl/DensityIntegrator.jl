@@ -80,8 +80,8 @@ function subselect_regular_surface(potential_pts::AbstractVector{GB.Point{Dim, T
     return used_pts
 end
 
-compute_triangulation(pts::AbstractVector{GB.Point{Dim, T}}) where {Dim, T} =
-    compute_triangulation(HalfEdgeTopology, pts)
+# compute_triangulation(pts::AbstractVector{GB.Point{Dim, T}}) where {Dim, T} =
+#     compute_triangulation(HalfEdgeTopology, pts)
 
 function compute_triangulation(pts::AbstractVector{GB.Point{Dim, T}}) where {Dim, T}
     push!(pts, GB.Point{Dim, T}(zeros(T, Dim)))
@@ -102,9 +102,9 @@ function compute_triangulation(pts::AbstractVector{GB.Point{Dim, T}}) where {Dim
     # simplices = simplices[:, simplices[end, :] .== length(pts)]
 
     simplices = simplices[1:Dim, :]
-    connecs = [connect(Tuple(col), Ksimplex{Dim-1, Dim})
+    connecs = [connect(Tuple(col), KSimplex{Dim-1, Dim})
                for col in eachcol(simplices)]
-    topo = IndexedAdjacenciesTopology(connecs)
+    topo = IndAdjTopology(connecs)
 
 
     # topo = TopoType(connect.((eachcol(simplices))))
@@ -115,7 +115,7 @@ end
 """
 Usage example:
 ```julia
-dim = 4 # 3
+dim = 3 # 3
 pts0 = DensityIntegrator.initialize_points_on_unit_hypersphere(dim, 10_000);
 pts1 = DensityIntegrator.subselect_regular_surface(copy(pts0), 500);
 # without viz
