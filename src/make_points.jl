@@ -102,7 +102,7 @@ function compute_triangulation(pts::AbstractVector{GB.Point{Dim, T}}) where {Dim
     # simplices = simplices[:, simplices[end, :] .== length(pts)]
 
     simplices = simplices[1:Dim, :]
-    connecs = [connect(Tuple(col), KSimplex{Dim-1, Dim})
+    connecs = [connect(Tuple(col), Simplex{Dim-1, Dim})
                for col in eachcol(simplices)]
     topo = IndAdjTopology(connecs)
 
