@@ -128,6 +128,8 @@ function f(pts_mat, t, params, D)
     # @show (1 ./ (areas .* densities))
     # areas = ones(length(pts))
     # slopes = 1 ./ (areas .* (densities .+ 1e-5))
+    @assert all(>=(0), areas)
+    @assert all(>=(0), densities)
     slopes = 1 ./ (areas .* densities)
     # foo = make_foo(D)
     function foo(p)
@@ -148,6 +150,7 @@ function f(pts_mat, t, params, D)
     # extra_weights = sigmoid.(1000 .* lambdas; alpha=1)
     # extra_weights = sigmoid.(100 .* lambdas; alpha=3)
     lambdas_ = lambdas / (maximum(abs, lambdas) + 1e-4)
+    @assert all(-1 .<= lambdas_ .<= 1)
     # @assert maximum(abs, lambdas_) ≈ (1/(1+1e-4)) " $(maximum(abs, lambdas_)) $(lambdas_)"
 
 
@@ -157,7 +160,11 @@ function f(pts_mat, t, params, D)
     # weights = normalize(densities.^2 .* 1, 1)
     # weights = normalize(densities.^2 .* abs.(extra_weights), 1)
 
-    @assert all(>(0), weights.*slopes)
+    @assert all(isfinite, weights)
+    @assert all(isfinite, slopes)
+    @assert all(>=(0.), weights) weights
+    @assert all(>=(0.), slopes) slopes
+    @assert all(>=(0.), weights.*slopes) weights.*slopes
 
     # weights = ones(size(densities)) / length(pts)
     # slopes .= mean(slopes)

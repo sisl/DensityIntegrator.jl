@@ -39,14 +39,17 @@ function f_higher_d(pts_arr, params, t)
         mat = [(pts_arr[:, neigh_vert_idxs[2:end]] .- p0) (-dirs[vidx])]
         normalize!.(eachcol(mat))
 
-        lambdas = (mat'*mat + 1e-5I)\mat'*(pts_arr[:, vidx] - p0)
+        # lambdas = (mat'*mat + 1e-5I)\mat'*(pts_arr[:, vidx] - p0)
+        lambdas = (mat'*mat + 1e-8I)\mat'*(pts_arr[:, vidx] - p0)
         lambdas_[vidx] = lambdas[end]
     end
     @assert all(debug_flag)
 
-    lambdas_ ./= (maximum(abs, lambdas_) + 1e-4)
+    # lambdas_ ./= (maximum(abs, lambdas_) + 1e-4)
+    lambdas_ ./= maximum(abs, lambdas_)
 
-    weights = normalize(densities.^2 .* (1 .+ 7/8 .* lambdas_), 1)
+    # weights = normalize(densities.^2 .* (1 .+ 7/8 .* lambdas_), 1)
+    weights = normalize(densities.^2 .* (1 .+ 1/8 .* lambdas_), 1)
     weighted_step_size = weights .* unweighted_step_size
 
     res = stack(weighted_step_size .* dirs)
@@ -143,8 +146,8 @@ end
 function run_higher_d_any(dim; p_max=0.1, n_pts=80, mesh_init=nothing)
     pts0 = DensityIntegrator.initialize_points_on_unit_hypersphere(dim, 10_000);
     pts = DensityIntegrator.subselect_regular_surface(copy(pts0), n_pts);
-    # pts .*= (1e-6)^(1/dim);
-    pts .*= 1e-4
+    pts .*= (1e-8)^(1/dim);
+    # pts .*= 1e-4
     @info "Initialized points"
 
     myhull = (isnothing(mesh_init) ? DensityIntegrator.compute_triangulation(copy(pts)) : mesh_init)
@@ -166,7 +169,8 @@ function run_higher_d_any(dim; p_max=0.1, n_pts=80, mesh_init=nothing)
     # solve_opts = (; abstol=1e-5, reltol=1e-5)
     solve_opts = (;)
     # solver = BS3();
-    solver = Tsit5()
+    # solver = Tsit5()
+    solver = Vern8(; thread=OrdinaryDiffEq.True())
     sol = solve(prob, solver; saveat=p_max/100, progress=true, progress_steps=100, solve_opts...)
     myhull, sol, D
 end
@@ -247,3 +251,17 @@ end
 # 0.0
 #
 # julia> mean([Meshes.myin(Meshes.Point(x...), myhull) for x in eachcol(samples)])
+
+
+# Plotting onto facets
+#
+# julia> xs = LinRange(-1,1,50);
+# julia> ys = copy(xs);
+# julia> zs = copy(xs);
+# julia> vol = [pdf(MvNormal(zeros(2), 1.), [x;y]) for x in xs, y in ys, z in zs];
+# julia> fig, scene, ax, other... = Makie.volumeslices(xs, ys, zs, vol)
+#
+# julia> vis = ax[:heatmap_xz][].visible
+# julia> vis = ax.visible  # or maybe even this?
+# julia> vis.listeners = vis.listeners[1:2] # take away the xz listener
+# julia> vis[] = false
