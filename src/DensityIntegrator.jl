@@ -25,7 +25,12 @@ struct Setup{D, F}
     Setup(f::F, D; Δx=0.1) where F = new{D, F}(
         f,
         Δx,
-        BinaryHeap{Pair{Cell_t{D}, Float64}}(Base.By(last, Base.Order.Reverse), [Cell_t{6}(zeros(Int, 6))=>integrate(f, Cell_t{6}(zeros(Int, 6)), Δx)]),
+        BinaryHeap{Pair{Cell_t{D}, Float64}}(
+            Base.By(last, Base.Order.Reverse),
+            let cell0 = Cell_t{D}(zeros(Int, D))
+                [cell0=>integrate(f, cell0, Δx)]
+            end
+        ),
         AVLTree{Cell_t{D}}(),
         Cell_t{D}[],
         Float64[]
